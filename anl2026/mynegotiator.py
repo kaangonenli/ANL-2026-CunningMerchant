@@ -10,14 +10,24 @@ where:
                  (measured by Kendall rank correlation — lower correlation = higher concealing score)
 
 Strategy Overview:
-    1. Aspiration-based bidding — start tough, concede over time using exponential decay
-    2. Opponent preference modeling — frequency-based model to estimate opponent's utility
-    3. Adaptive acceptance — accept if offer meets our decaying threshold
-    4. Deception via concealing bidding — strategically offer bids that mislead the
-       opponent's model of our preferences while still being rational for us
-    5. Opponent behavior tracking — detect concession patterns to adapt timing
+    1. Aggressive Anchoring (Opening Move): Holds ground firmly with an elevated threshold 
+       during the initial 15% of the negotiation to probe opponent concession rates.
+    2. Aspiration-based Concession: Follows a strict time-dependent Boulware curve (e=4.0) 
+       to project a tough, unyielding posture throughout the mid-game.
+    3. Haggling Fluctuation (Zig-zag Strategy): Injects controlled, high-frequency utility 
+       vibrations into bids to disrupt and dismantle the opponent's curve-fitting or 
+       linear regression models.
+    4. Active Preference Inversion (Throw a curve): Misleads the opponent by offering suboptimal 
+       values on our highly critical issues while maximizing utility on irrelevant issues, 
+       effectively flipping our apparent preference profile.
+    5. Opponent Frequency Modeling & Trend Tracking: Utilizes frequency analysis for 
+       issue estimation and real-time linear regression to monitor opponent pacing.
+    6. Adaptive Last-Minute Compromise (Merchant Panic): Dynamically collapses acceptance 
+       thresholds in the final 2.5% of rounds to guarantee a deal and completely eliminate 
+       timeout risks.
 
-Author: Umut Murat (umutmurat275@gmail.com)
+Authors: Umut Murat (umutmurat275@gmail.com)
+         Kaan Gönenli (kaan.gonenli@ozu.edu.tr)
 Course: CS451 Project — ANAC 2026
 """
 
@@ -48,12 +58,14 @@ class MyNegotiator(SAOCallNegotiator):
     # Aspiration exponent: >1 = boulware (holds out), <1 = conceder
     # 3.5 is moderately boulware — tough for most of the negotiation,
     # then concedes in the last ~25% of rounds
-    ASPIRATION_EXPONENT: float = 3.5
+    ASPIRATION_EXPONENT: float = 4.0 # increased for tougher merchant
 
     # What fraction of the time we use concealing (deceptive) bids vs
     # honest (utility-maximizing) bids. Higher = more deceptive but riskier.
     # 0.4 means 40% of our offers are chosen to confuse the opponent's model.
-    CONCEAL_RATIO: float = 0.4
+    CONCEAL_RATIO: float = 0.45 # slightly incrased for aggresive deception
+    # Haggling volatility: maximum percentage of utility fluctuation to confuse opponent models
+    HAGGLING_VOLATILITY: float = 0.3 # 3% up-and-down zig-zag pattern for unpredictiability
 
     # Opponent model learning rate — how fast we update issue weights
     # based on new offers from the opponent. Higher = more reactive.
@@ -63,7 +75,7 @@ class MyNegotiator(SAOCallNegotiator):
     OPPONENT_WINDOW_SIZE: int = 5
 
     # Weight of opponent trend in threshold adjustment
-    OPPONENT_TREND_WEIGHT: float = 0.12
+    OPPONENT_TREND_WEIGHT: float = 0.15
 
     def on_preferences_changed(self, changes):
         """
@@ -197,6 +209,13 @@ class MyNegotiator(SAOCallNegotiator):
         adjustment = trend * self.OPPONENT_TREND_WEIGHT * (self._max_utility - self._min_utility)
         threshold = max(self._min_utility, min(self._max_utility, threshold + adjustment))
 
+        # --- MERCHANT PANIC MODE (Endgame Capitulation) ---
+        # If time is running out (last 2.5%) and we risk a timeout, dynamically drop
+        # our threshold to accept anything that gives us at least 15% better than reservation.
+        if state.relative_time > 0.975:
+            panic_floor = self._min_utility + 0.15 * (self._max_utility - self._min_utility)
+            threshold = min(threshold, panic_floor)
+            
         return offer_utility >= threshold
 
     def _calc_threshold(self, state: SAOState) -> float:
@@ -218,18 +237,26 @@ class MyNegotiator(SAOCallNegotiator):
         t = state.relative_time
 
         # Aspiration level: 1 at start, 0 at deadline
-        if t <= 0:
-            level = 1.0
+        if t <= 0.15:
+            return self._max_utility - 0.02 * (self._max_utility - self._min_utility)
         elif t >= 1.0:
             level = 0.0
         else:
             level = 1.0 - math.pow(t, 1.0 / self.ASPIRATION_EXPONENT)
 
+        threshold = self._min_utility + level * (self._max_utility - self._min_utility)
+        # --- HAGGLING FLUCTUATION (Zikzak Teklif Taktigi) ---
+        # Inject artificial vibration to shatter enemy regression/curve-fitting models.
+        # Stop vibrating in the final phase (t > 0.90) to stabilize negotiation closing.
+        if 0.15 <= t <= 0.90:
+            vibration = random.uniform(-self.HAGGLING_VOLATILITY, self.HAGGLING_VOLATILITY)
+            vibration_utility = vibration * (self._max_utility - self._min_utility)
+            threshold = max(self._min_utility, min(self._max_utility, threshold + vibration_utility))
         # Scale to utility range
         return self._min_utility + level * (self._max_utility - self._min_utility)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Bidding strategy (with concealing/deception)
+    # Bidding strategy (with preferance inversion)
     # ──────────────────────────────────────────────────────────────────────
 
     def _generate_bid(self, state: SAOState) -> Outcome | None:
@@ -257,7 +284,7 @@ class MyNegotiator(SAOCallNegotiator):
 
         # Find candidate outcomes near our target level
         # We want outcomes with utility in [target - margin, target + margin]
-        margin = 0.05 * (self._max_utility - self._min_utility)
+        margin = 0.04 * (self._max_utility - self._min_utility)
         candidates = [
             (i, outcome)
             for i, (outcome, util) in enumerate(
@@ -283,9 +310,12 @@ class MyNegotiator(SAOCallNegotiator):
             candidates = [(i, self._rational_outcomes[i]) for i in range(n)]
 
         # Decide: concealing bid or honest bid?
-        # Early in negotiation, we conceal more (opponent is learning our weights).
+        #  Conceal heavily in the early/mid game.
         # Late in negotiation, we bid honestly (need to close the deal).
-        conceal_prob = self.CONCEAL_RATIO * (1.0 - state.relative_time)
+        if state.relative_time > 0.92:
+            conceal_prob = 0.0
+        else:
+            conceal_prob = self.CONCEAL_RATIO * (1.0 - state.relative_time)
 
         if random.random() < conceal_prob and len(candidates) > 1:
             # CONCEALING BID: among candidates with similar utility, pick the one
@@ -320,7 +350,7 @@ class MyNegotiator(SAOCallNegotiator):
         if not hasattr(self, '_issue_importance_rank'):
             return candidates[0][1]
 
-        best_score = -1.0
+        best_score = -float('inf')
         best_outcome = candidates[0][1]
 
         for _, outcome in candidates:
@@ -337,7 +367,10 @@ class MyNegotiator(SAOCallNegotiator):
                     # Check if this is our best value for this issue
                     is_best = (value == self._best_values.get(issue_idx))
                     if not is_best:
-                        conceal_score += importance
+                        conceal_score += importance* 3.0  # Reward deceiving on crucial issues
+                    else:
+                        # Heavy penalty for accidentally revealing our gold mines
+                        inversion_score -= importance * 2.0
             if conceal_score > best_score:
                 best_score = conceal_score
                 best_outcome = outcome
