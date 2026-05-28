@@ -65,7 +65,7 @@ class MyNegotiator(SAOCallNegotiator):
     # 0.4 means 40% of our offers are chosen to confuse the opponent's model.
     CONCEAL_RATIO: float = 0.45 # slightly incrased for aggresive deception
     # Haggling volatility: maximum percentage of utility fluctuation to confuse opponent models
-    HAGGLING_VOLATILITY: float = 0.3 # 3% up-and-down zig-zag pattern for unpredictiability
+    HAGGLING_VOLATILITY: float = 0.03 # 0.3% up-and-down zig-zag pattern for unpredictiability
 
     # Opponent model learning rate — how fast we update issue weights
     # based on new offers from the opponent. Higher = more reactive.
@@ -199,7 +199,13 @@ class MyNegotiator(SAOCallNegotiator):
         # Never accept below reservation value
         if offer_utility <= float(self.ufun.reserved_value):
             return False
-
+        # --- HARD FLOOR ---
+        # Sürenin ilk %85'inde, maksimum faydanın %65'inden düşük bir teklifi ASLA kabul etme.
+        # Bu, rakiplerin bizi ucuza kapatmasını engeller.
+        t = state.relative_time
+        hard_floor = self._min_utility + 0.65 * (self._max_utility - self._min_utility)
+        if t < 0.85 and offer_utility < hard_floor:
+            return False
         # Calculate aspiration-based threshold
         threshold = self._calc_threshold(state)
 
@@ -242,7 +248,7 @@ class MyNegotiator(SAOCallNegotiator):
         elif t >= 1.0:
             level = 0.0
         else:
-            level = 1.0 - math.pow(t, 1.0 / self.ASPIRATION_EXPONENT)
+            level = 1.0 - math.pow(t, self.ASPIRATION_EXPONENT)
 
         threshold = self._min_utility + level * (self._max_utility - self._min_utility)
         # --- HAGGLING FLUCTUATION (Zikzak Teklif Taktigi) ---
@@ -253,7 +259,7 @@ class MyNegotiator(SAOCallNegotiator):
             vibration_utility = vibration * (self._max_utility - self._min_utility)
             threshold = max(self._min_utility, min(self._max_utility, threshold + vibration_utility))
         # Scale to utility range
-        return self._min_utility + level * (self._max_utility - self._min_utility)
+        return threshold
 
     # ──────────────────────────────────────────────────────────────────────
     # Bidding strategy (with preferance inversion)
