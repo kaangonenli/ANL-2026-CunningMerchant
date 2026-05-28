@@ -364,7 +364,7 @@ class MyNegotiator(SAOCallNegotiator):
             # For each issue, check if the value offered is one of our top choices.
             # If we're offering a non-favorite value on an important issue,
             # that's maximally concealing.
-            conceal_score = 0.0
+            inversion_score = 0.0
             for issue_idx, importance in enumerate(self._issue_importance_rank):
                 if issue_idx < len(outcome):
                     # Higher importance issues contribute more to concealment
@@ -373,12 +373,12 @@ class MyNegotiator(SAOCallNegotiator):
                     # Check if this is our best value for this issue
                     is_best = (value == self._best_values.get(issue_idx))
                     if not is_best:
-                        conceal_score += importance* 3.0  # Reward deceiving on crucial issues
+                        inversion_score += importance* 3.0  # Reward deceiving on crucial issues
                     else:
                         # Heavy penalty for accidentally revealing our gold mines
                         inversion_score -= importance * 2.0
-            if conceal_score > best_score:
-                best_score = conceal_score
+            if inversion_score > best_score:
+                best_score = inversion_score
                 best_outcome = outcome
 
         return best_outcome
